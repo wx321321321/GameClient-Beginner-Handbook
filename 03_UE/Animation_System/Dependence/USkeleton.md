@@ -194,7 +194,13 @@ TMap<TObjectKey<USkinnedAsset>, TUniquePtr<FSkeletonToMeshLinkup>> SkinnedAssetL
     uint32 C;
     uint32 D;
 ```
+FName 很适合“按名字访问”，但它不是稳定身份 ID。
 
+
+UE 里很多“需要长期稳定跟踪”的东西，会额外配 GUID。比如UBlueprint里最典型的场景就是：
+蓝图变量 / 属性 / 节点 / 成员引用
+如果一个蓝图变量改名了：只靠 Name，旧引用容易断
+有 GUID，就可以知道“虽然名字变了，但还是原来那个成员”
 ### FName：是 UE 用来做“高效名字标识”的轻量类型
 FName 会把名字放进全局名字表（name table）一类的结构里，实例本身更像是在保存索引/编号，而不是每次都完整保存一份字符串
 ```
