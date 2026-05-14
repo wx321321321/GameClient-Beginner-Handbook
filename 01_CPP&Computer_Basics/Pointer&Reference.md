@@ -142,6 +142,10 @@ eg：1.作为函数参数。2。对接 C 语言底层的旧库 3.类的非拥有
         只有都对上才返回地址，否则返回nullptr
     值语义：optional
 		
+
+
+
+
 #### 手撕注意：
 ##### 1.uniqueptr
     禁用拷贝、可以移动
@@ -157,3 +161,4 @@ eg：1.作为函数参数。2。对接 C 语言底层的旧库 3.类的非拥有
     2.析构对于ptr\cb的删除
     3.lock，检查strong有没有，有的话返回个sharedptr，实际上就是生产个sharedptr
     4.weak_ptr 根本没有提供 operator-> 和 operator*
+
