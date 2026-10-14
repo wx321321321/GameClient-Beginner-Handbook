@@ -4,6 +4,18 @@
 
 ### 重载、重写与模板：
 ##### 重载：同一个函数名，参数不同，在编译期选择调用哪个函数、
+
+fun(int a)和fun(const int a)不能重载，因为是值拷贝，第二个只是里面不能修改。
+fun(int& a)和fun(const int& a)能重载 第二个对应右值引用、常量
+```
+int& 只能绑定非 const 左值。
+const int& 可以绑定 const 左值、非 const 左值和右值。
+对于非 const 左值 a，两个重载都能调用，但 int& 匹配更精确，所以选择 fun(int&)。
+```
+fun(int* a)和fun(const int* a)能重载
+```
+这里的 const 修饰的是指针指向的对象，属于底层 const，会影响类型，因此可以重载。
+```
 ##### 重写：也叫覆盖，子类覆盖父类的函数，只要是同名就覆盖，不管参数对不对（根据作用域查询）
 ##### 模板：模板就是“把类型、值、行为参数化”的代码生成机制，有函数模板和类模板。 
 
@@ -79,9 +91,22 @@ ParamType 是指针或普通引用（比如 T& 或 T*）保留原类型的 const
 ParamType 是万能引用（T&&）  如果你传左值，T 会被推导为左值引用（触发引用折叠）。如果你传右值，T 就是一个普通非引用类型。
 ParamType 是纯粹的值传递，是按值传递，意味着你要拷贝出一个全新的独立对象。丢掉 const、引用。如果传入数组或函数，会退化成指针
 ```
+##### 现根据paramtype推导出T，再将T带回去。
+
 ##### auto
 推导规则和模板推导几乎一模一样
 对于初始化列表auto x = {1, 2, 3};，auto能推导出来std::initializer_list<int>，但函数模板不能
+```
+const int x = 10;
+const int& ref = x;
+const int* const ptr = &x;
+
+auto  a = ref;  // int
+auto& b = ref;  // const int&
+auto  c = ptr;  // const int*
+auto* d = ptr;  // const int*
+
+```
 ##### SFINAE
 替换失败非错误：编译器在进行函数重载决议（Overload Resolution）时，它会拿着你传入的具体类型（比如 int），去尝试套用所有的模板候选人。
 如果是函数体内部（Body）的语法错误： 编译器会直接抛出致命错误（Hard Error），编译失败。
