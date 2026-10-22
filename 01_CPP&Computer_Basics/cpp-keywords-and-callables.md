@@ -1,8 +1,14 @@
-# C++ 关键字与可调用对象
+# 1.6 C++ 关键字与可调用对象
+
+<!-- course-navigation:start -->
+[上一节：1.5 类、继承与多态](classes-inheritance-and-polymorphism.md) · [本章目录](README.md) · [下一节：1.7 内存模型与编译管线](memory-and-compilation.md) · [手册首页](../README.md)
+<!-- course-navigation:end -->
 
 这一篇把零散语法按用途放在一起：先看类型转换和类型信息，再看存储与定义规则，最后把函数指针、Lambda、`std::function` 串起来。对象所有权和转发的细节放在[指针与引用](pointers-and-references.md)，排序实现放在[STL 与常用算法](stl-and-algorithms.md)。
 
-## 四种显式类型转换
+阅读时一直追问两件事：“这一步发生在什么时刻？”“状态究竟保存在谁身上？”先熟悉函数和上一节的类，再运行 [C++17 语言实验](../examples/course/cpp-language-labs.cpp)中的 `keyword_labs`，观察类型转换、求值和闭包副本的差别。
+
+## 1.6.1 四种显式类型转换
 
 选择 cast 时先问：是在做数值或继承关系转换，检查动态类型，修改访问限定，还是重新解释底层表示？四种 cast 表达的意图不同，不能互相替代。
 
@@ -13,13 +19,25 @@
 | `const_cast<T>(x)` | 添加/移除指针、引用访问路径上的 `const` / `volatile` | 去掉限定不代表原对象真的可修改 |
 | `reinterpret_cast<T>(x)` | 语言允许的底层指针/整数等重新解释 | 对齐、生命周期、可访问类型等规则仍然存在 |
 
-### `static_cast`：转换关系由编译器检查
+### 1.6.1.1 `static_cast`：转换关系由编译器检查
 
 它不是“所有转换都不安全”：例如 `int` 转 `double`、无歧义的公开派生类转基类都有明确规则。危险的典型情形是向下转换，编译器允许 `Base*` 转 `Derived*`，却不在运行时验证对象是否真是 `Derived`。
 
-编译器需要足够的类型定义来判断转换是否合法、是否调整地址。转换可能生成数值变换或指针调整指令，也可能优化为无操作，不存在统一的机器码形式。兄弟基类不能直接静态侧向转换，相关示例见[继承与对象转换](classes-inheritance-and-polymorphism.md#向下转换和侧向转换)。[标准草案：static_cast](https://eel.is/c++draft/expr.static.cast)
+先看一个不涉及继承的实际问题：算平均每局得分时，为什么已经接收成 `double` 还丢了小数？
 
-### `dynamic_cast`：失败也有定义
+```cpp
+int score = 5;
+int games = 2;
+double a = score / games;                      // 2.0
+double b = static_cast<double>(score / games); // 2.0
+double c = static_cast<double>(score) / games; // 2.5
+```
+
+前两行都先用两个整数做除法，结果已经是 2；之后转成浮点数无法找回被截掉的部分。第三行先把一个操作数转成 `double`，再进行浮点除法。[numeric_conversion()](../examples/course/cpp-language-labs.cpp) 检查这三个结果。此例约定 `games != 0`；cast 不会替运算补上零除检查，也不保证任意大整数都能被浮点类型精确表示。
+
+编译器需要足够的类型定义来判断转换是否合法、是否调整地址。转换可能生成数值变换或指针调整指令，也可能优化为无操作，不存在统一的机器码形式。兄弟基类不能直接静态侧向转换，相关示例见[继承与对象转换](classes-inheritance-and-polymorphism.md#1534-向下转换和侧向转换)。[标准草案：static_cast](https://eel.is/c++draft/expr.static.cast)
+
+### 1.6.1.2 `dynamic_cast`：失败也有定义
 
 常见向下、侧向转换依赖运行时类型信息 RTTI；源类需为多态类，即有虚函数（包括继承来的虚函数）。普通向上转换是特殊情况，并不要求源类一定有虚函数。目标通常为完整类类型的指针/引用，也支持由多态指针转换到 `void*` 取得最派生对象地址。
 
@@ -28,7 +46,7 @@
 
 RTTI 不等于虚表：非多态类型的 `typeid` 可由静态类型确定；通过多态对象取得动态类型信息时，主流 ABI 常通过虚表附近的元数据实现。运行时转换有检查成本，但不能脱离实现、继承结构和调用频率断言“性能很烂”，热点中应测量。[标准草案：dynamic_cast](https://eel.is/c++draft/expr.dynamic.cast)
 
-### `const_cast` 与 `volatile`
+### 1.6.1.3 `const_cast` 与 `volatile`
 
 `const_cast` 修改访问路径的限定，不负责复制对象，也不会让真正的只读对象获得可写性。
 
@@ -45,7 +63,7 @@ const int fixed = 42;
 
 `volatile` 让对指定对象的访问成为实现必须按相应规则处理的可观察行为，常用于设备寄存器等底层场景。原先的“每次都读写物理内存、绝不重排任何访问”太强：它不保证绕过 CPU 缓存，不提供原子性，不建立线程间同步关系，也不能充当普通内存访问的通用屏障。线程共享数据应使用原子操作或锁，设备语义则需结合平台文档。
 
-### `reinterpret_cast` 不创建目标对象
+### 1.6.1.4 `reinterpret_cast` 不创建目标对象
 
 ```cpp
 int value = 42;
@@ -55,7 +73,7 @@ float* p = reinterpret_cast<float*>(&value);
 
 换了指针类型，不等于原地址上已经存在一个合法 `float` 对象。它也不是任意类型之间都能使用的“按位转换”。若要复制可平凡复制类型的对象表示，可按条件使用 `std::memcpy`，C++20 起可考虑 `std::bit_cast`；两者与通过错误类型指针访问对象是不同操作。[标准草案：reinterpret_cast](https://eel.is/c++draft/expr.reinterpret.cast)
 
-## `sizeof`：看静态类型，不看动态对象
+## 1.6.2 `sizeof`：看静态类型，不看动态对象
 
 `sizeof` 的结果是字节数，类型为 `std::size_t`。通常在编译期根据类型布局得到结果，其操作数不求值。
 
@@ -70,9 +88,19 @@ int* p = arr;
 
 若 `Base* p` 指向派生对象，`sizeof(p)` 是指针大小，`sizeof(*p)` 是静态类型 `Base` 的大小，不会查询派生对象的完整大小。引用表达式的 `sizeof` 也是被引用类型的大小。[标准草案：sizeof](https://eel.is/c++draft/expr.sizeof)
 
-## `static`：根据出现的位置判断含义
+“不求值”可以用一个可观察的计数验证：
 
-### 局部静态变量：只初始化一次，跨调用保存状态
+```cpp
+int counter = 0;
+std::size_t bytes = sizeof(++counter);
+// counter == 0；bytes == sizeof(int)，不要写死为 4。
+```
+
+编译器仍要检查 `++counter` 的语法和类型，但不会为了求大小真的执行递增。对照 [unevaluated_sizeof()](../examples/course/cpp-language-labs.cpp)：若把第二行改成 `int next = ++counter;`，才会得到 `counter == 1`。不要混淆“不执行表达式”和“不检查表达式”。
+
+## 1.6.3 `static`：根据出现的位置判断含义
+
+### 1.6.3.1 局部静态变量：只初始化一次，跨调用保存状态
 
 ```cpp
 void f() {
@@ -85,7 +113,20 @@ void f() {
 
 C++11 起，局部静态变量的初始化具有线程安全保证；这不保证之后的 `++count` 是线程安全的。静态存储期是语言概念，不应简单当成固定的“静态区”物理位置。[标准草案：块作用域静态变量](https://eel.is/c++draft/stmt.dcl)
 
-### 命名空间变量和函数：内部链接
+把计数返回给调用者，就能看到跨调用保存的状态：
+
+```cpp
+int next_ticket() {
+    static int ticket = 0;
+    return ++ticket;
+}
+int first = next_ticket();  // 本次程序首次调用：1
+int second = next_ticket(); // 2，不会每次重新从 0 开始
+```
+
+这里函数只能在单线程中直接这样调用；初始化一次不代表后续读写自动加锁。[persistent_local()](../examples/course/cpp-language-labs.cpp) 检查这两个结果。若把 `static` 去掉，每次创建新的局部 `ticket`，两个返回值都会是 1。
+
+### 1.6.3.2 命名空间变量和函数：内部链接
 
 ```cpp
 static int g_value = 10;
@@ -103,7 +144,7 @@ namespace {
 }
 ```
 
-### 静态数据成员：类共享的数据
+### 1.6.3.3 静态数据成员：类共享的数据
 
 ```cpp
 class A {
@@ -122,7 +163,7 @@ public:
 };
 ```
 
-### 静态成员函数：没有隐式对象
+### 1.6.3.4 静态成员函数：没有隐式对象
 
 ```cpp
 class A {
@@ -135,7 +176,7 @@ public:
 
 静态成员函数没有隐式 `this`，可以直接使用静态成员，通过 `A::foo()` 调用。它不能直接访问某个对象的非静态成员，但可以显式接收对象并访问该对象。
 
-## `inline` 与宏不是一回事
+## 1.6.4 `inline` 与宏不是一回事
 
 `inline` 不强制调用处展开。对通常的头文件函数/变量，它的重要作用是允许满足 ODR 条件的多处定义共同表示同一个实体；不仅要定义文本一致，相关名字解析等也必须符合规则。C++17 才引入 inline 变量，模块中的规则还需单独考虑。
 
@@ -155,9 +196,9 @@ inline int square(int x) { return x * x; }
 
 类内定义的普通成员函数通常隐式 inline；模板也常放在头文件，但模板可多处定义有自己的规则，不能把两者完全等同。[标准草案：inline](https://eel.is/c++draft/dcl.inline)
 
-## 从函数指针到 Lambda
+## 1.6.5 从函数指针到 Lambda
 
-### 函数指针只有调用入口
+### 1.6.5.1 函数指针只有调用入口
 
 ```cpp
 int Add(int a, int b) { return a + b; }
@@ -167,7 +208,7 @@ int (*addPtr)(int, int) = Add;
 
 普通函数指针不携带一次具体调用所需的额外状态。例如“每次相加还要加一个运行时的 `base`”，就还需要另外保存 `base`。
 
-### Lambda 是带调用运算符的闭包对象
+### 1.6.5.2 Lambda 是带调用运算符的闭包对象
 
 ```cpp
 int base = 10;
@@ -187,6 +228,19 @@ struct ClosureModel {
 
 `[x]` 保存值副本；`[&x]` 引用外部变量，不延长那个变量的生命周期。普通值捕获 Lambda 的调用运算符默认是 `const`；使用 `mutable` 可修改闭包中的副本，不等于修改原变量。
 
+捕获发生在创建闭包时，调用发生在使用闭包时，这两个时刻可能相隔很久：
+
+```cpp
+int bonus = 10;
+auto snapshot = [bonus](int score) { return score + bonus; };
+auto live = [&bonus](int score) { return score + bonus; };
+bonus = 20;
+int a = snapshot(5);  // 15：闭包保存的是创建时的 10
+int b = live(5);      // 25：读取仍然存活的外部 bonus
+```
+
+`snapshot` 和 `live` 的接口看起来相同，依赖的状态却不同。[capture_time()](../examples/course/cpp-language-labs.cpp) 验证上述结果。把 `live` 返回给一个比局部 `bonus` 活得更久的调用者会造成悬空引用；返回闭包本身并不会延长 `bonus` 的生命周期。
+
 在成员函数中，`[this]` 保存当前对象的指针，对象销毁后再调用可能悬空。C++17 的 `[*this]` 复制当前对象到闭包中，但是否真正独立还取决于对象的拷贝语义，例如裸指针成员复制后仍可能指向同一资源。
 
 无捕获、满足对应条件的 Lambda 可以转换成匹配的函数指针：
@@ -198,7 +252,7 @@ int (*lambdaPtr)(int, int) = lambda;
 
 捕获 Lambda 不能直接这样转换，因为函数指针没有地方保存捕获状态。[标准草案：Lambda](https://eel.is/c++draft/expr.prim.lambda)
 
-## `std::function`：用统一签名保存可调用对象
+## 1.6.6 `std::function`：用统一签名保存可调用对象
 
 ```cpp
 #include <functional>
@@ -216,7 +270,20 @@ std::function<int(int, int)> f3 = lambda;
 
 三者类型不同，但都能按 `int(int, int)` 调用，因此可放进同一种包装器。它不是“任何对象都能装”：目标必须满足签名和构造约束，`std::function` 保存的目标还必须可复制。
 
-### 类型擦除的实现模型
+复制包装器时，闭包里的状态会发生什么？
+
+```cpp
+std::function<int()> first = [n = 0]() mutable { return ++n; };
+int a = first();       // 1，first 内部的 n 变为 1
+auto second = first;  // 复制当时的闭包状态，两份 n 都是 1
+int b = first();       // 2，修改 first 的副本
+int c = second();      // 2，修改 second 的副本
+int d = first();       // 3，second 的 n 仍为 2
+```
+
+这里 `n` 按值保存，所以两份闭包之后独立变化；若闭包捕获的是引用或共享指针，复制后仍可能访问同一个外部对象。运行 [copied_callable()](../examples/course/cpp-language-labs.cpp)，再把捕获改成外部计数器的引用，预测结果为何会连续增加。类型擦除保留调用行为，也保留目标自己的拷贝语义。
+
+### 1.6.6.1 类型擦除的实现模型
 
 ```text
 std::function
@@ -239,7 +306,7 @@ int InvokeClosure(void* storage, int a, int b) {
 
 小对象可能直接放在包装器内部，其他对象可能在堆上分配。小对象优化的容量、对齐限制和适用条件由实现决定，不是“只要够小就一定内嵌”。
 
-### 使用时关注三种成本
+### 1.6.6.2 使用时关注三种成本
 
 - 间接调用可能阻碍内联；目标足够明确时，优化器仍可能消除部分开销。
 - 保存某些目标会发生分配，复制包装器也可能复制状态或分配内存。
@@ -247,7 +314,7 @@ int InvokeClosure(void* storage, int a, int b) {
 
 捕获 `std::unique_ptr` 的仅可移动 Lambda 不能直接放进 `std::function`。可以根据接口选用模板接收可调用对象，或在支持 C++23 时考虑 `std::move_only_function`。空 `std::function` 可以通过布尔判断检查，直接调用会抛 `std::bad_function_call`。[标准草案：std::function](https://eel.is/c++draft/func.wrap.func)
 
-## `union`：共享存储不等于成员同时有效
+## 1.6.7 `union`：共享存储不等于成员同时有效
 
 `union` 的非静态数据成员共享存储。大小足以容纳最大成员，并满足对齐要求，因此可能有尾部填充。
 
@@ -266,6 +333,8 @@ u.f = 3.14f;                  // 此例切换为 f
 
 `union` 可以有成员函数、构造和析构函数，不能有基类、不能作为基类，也不能有虚函数。[标准草案：union](https://eel.is/c++draft/class.union)
 
-## 排序笔记的对应位置
+## 1.6.8 排序笔记的对应位置
 
-原笔记中的 `sort` 不属于语言关键字。`std::sort` 常见实现采用内省排序：快速排序处理大区间、递归深度受限时转堆排序、小区间用插入排序。标准规定排序结果和复杂度要求，不强制这个实现组合；完整说明见[算法与容器配合](stl-and-algorithms.md#算法与容器配合)。
+原笔记中的 `sort` 不属于语言关键字。`std::sort` 常见实现采用内省排序：快速排序处理大区间、递归深度受限时转堆排序、小区间用插入排序。标准规定排序结果和复杂度要求，不强制这个实现组合；完整说明见[算法与容器配合](stl-and-algorithms.md#195-算法与容器配合)。
+
+回看本篇，用“发生时刻”和“状态归属”解释三个问题：把除法结果转换成 `double` 为什么晚了一步；`sizeof(++counter)` 为什么不递增；复制 `std::function` 为什么有时独立、有时共享状态。对应答案分别是运算前的类型、未求值操作数、被包装目标自身的捕获与复制方式。

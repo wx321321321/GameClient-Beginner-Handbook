@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "chapters": [
+    {
+      "number": 1,
+      "key": "cpp",
+      "title": "计算机系统与 C++",
+      "directory": "01_CPP&Computer_Basics",
+      "articles": [
+        "program-and-cpp-basics.md",
+        "computer-architecture.md",
+        "operating-systems.md",
+        "pointers-and-references.md",
+        "classes-inheritance-and-polymorphism.md",
+        "cpp-keywords-and-callables.md",
+        "memory-and-compilation.md",
+        "templates.md",
+        "stl-and-algorithms.md",
+        "processes-threads-and-synchronization.md",
+        "computer-networks.md",
+        "design-patterns.md",
+        "lua.md",
+        "rotations-and-quaternions.md"
+      ]
+    },
+    {
+      "number": 2,
+      "key": "graphics",
+      "title": "图形与空间变换",
+      "directory": "02_Graphics",
+      "articles": [
+        "transforms-and-skinning.md",
+        "rendering-and-gpu.md"
+      ]
+    },
+    {
+      "number": 3,
+      "key": "ue",
+      "title": "Unreal Engine 系统",
+      "directory": "03_UE",
+      "articles": [
+        "garbage-collection-and-reflection.md",
+        "runtime-type-checking.md",
+        "animation-overview.md",
+        "animation-system-comparison.md"
+      ]
+    },
+    {
+      "number": 4,
+      "key": "projects",
+      "title": "从零设计射击项目",
+      "directory": "04_Projects",
+      "articles": [
+        "shooter-scope-and-architecture.md",
+        "shooter-runtime-and-input.md",
+        "shooter-weapons-and-ballistics.md",
+        "shooter-combat-and-abilities.md",
+        "shooter-network-authority.md",
+        "shooter-presentation.md",
+        "shooter-world-and-ai.md",
+        "shooter-ui-data-and-services.md",
+        "shooter-performance-and-tooling.md",
+        "shooter-integration-milestones.md",
+        "shooting-pipeline.md",
+        "camera-and-shooting-direction.md",
+        "attributes-and-sync.md",
+        "network-synchronization.md",
+        "aoi.md",
+        "als-locomotion.md",
+        "qq-speed-animation-and-ui.md"
+      ]
+    },
+    {
+      "number": 5,
+      "key": "study",
+      "title": "学习安排与复盘",
+      "directory": "05_StudyPlan",
+      "articles": [
+        "phase-1.md",
+        "coding-reference.md",
+        "cpp-cs-interview-drill-prompt.md",
+        "leetcode-practice.md",
+        "leetcode-review.md"
+      ]
+    }
+  ]
+}

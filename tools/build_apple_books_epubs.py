@@ -48,6 +48,7 @@ class VolumeSpec:
     part_label: str
     order: tuple[str, ...]
     accent: tuple[int, int, int]
+    number: int = 0
 
 
 @dataclass(frozen=True)
@@ -98,85 +99,50 @@ class Asset:
     data: bytes
 
 
-CPP = VolumeSpec(
-    source_dir="01_CPP&Computer_Basics",
-    title="C++ 与计算机基础",
-    part_label="第一编",
-    order=(
-        "computer-architecture.md",
-        "operating-systems.md",
-        "computer-networks.md",
-        "memory-and-compilation.md",
-        "cpp-keywords-and-callables.md",
-        "pointers-and-references.md",
-        "classes-inheritance-and-polymorphism.md",
-        "templates.md",
-        "stl-and-algorithms.md",
-        "processes-threads-and-synchronization.md",
-        "design-patterns.md",
-        "lua.md",
-        "rotations-and-quaternions.md",
-    ),
-    accent=(62, 190, 204),
-)
-
-GRAPHICS = VolumeSpec(
-    source_dir="02_Graphics",
-    title="计算机图形学",
-    part_label="第二编",
-    order=("transforms-and-skinning.md", "rendering-and-gpu.md"),
-    accent=(244, 147, 61),
-)
-
-UE = VolumeSpec(
-    source_dir="03_UE",
-    title="Unreal Engine",
-    part_label="第三编",
-    order=(
-        "animation-overview.md",
-        "garbage-collection-and-reflection.md",
-        "runtime-type-checking.md",
-        "animation-system-comparison.md",
-    ),
-    accent=(118, 126, 247),
-)
-
-
-BOOKS = (
-    BookSpec(
-        title="C++ 与计算机基础",
-        filename="01_CPP与计算机基础_AppleBooks.epub",
-        cover_lines=("C++ 与", "计算机基础"),
-        cover_mark="C++",
-        volumes=(CPP,),
-        accent=CPP.accent,
-    ),
-    BookSpec(
-        title="计算机图形学",
-        filename="02_计算机图形学_AppleBooks.epub",
-        cover_lines=("计算机图形学",),
-        cover_mark="GFX",
-        volumes=(GRAPHICS,),
-        accent=GRAPHICS.accent,
-    ),
-    BookSpec(
-        title="Unreal Engine 学习笔记",
-        filename="03_UnrealEngine学习笔记_AppleBooks.epub",
-        cover_lines=("Unreal Engine", "学习笔记"),
-        cover_mark="UE",
-        volumes=(UE,),
-        accent=UE.accent,
-    ),
-    BookSpec(
+def course_book_specs() -> tuple[dict[str, VolumeSpec], dict[str, BookSpec]]:
+    """One course map defines both source numbering and EPUB reading order."""
+    config_path = Path(__file__).with_name("course-map.json")
+    config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+    if config.get("version") != 1:
+        raise ValueError("Unsupported course-map version")
+    presentation = {
+        "cpp": ((62, 190, 204), ("计算机系统", "与 C++"), "C++", "01_CPP与计算机基础_AppleBooks.epub"),
+        "graphics": ((244, 147, 61), ("图形与", "空间变换"), "GFX", "02_计算机图形学_AppleBooks.epub"),
+        "ue": ((118, 126, 247), ("Unreal Engine", "系统"), "UE", "03_UnrealEngine学习笔记_AppleBooks.epub"),
+        "projects": ((226, 100, 116), ("从零设计", "射击项目"), "GAME", "04_游戏项目实践_AppleBooks.epub"),
+        "study": ((124, 186, 94), ("学习安排", "与复盘"), "PLAN", "05_学习计划与练习_AppleBooks.epub"),
+    }
+    volumes: dict[str, VolumeSpec] = {}
+    books: dict[str, BookSpec] = {}
+    for expected, item in enumerate(config["chapters"], 1):
+        key = item["key"]
+        if item["number"] != expected or key in volumes:
+            raise ValueError("Course chapters must be sequential and unique")
+        accent, lines, mark, filename = presentation[key]
+        volume = VolumeSpec(
+            source_dir=item["directory"], title=item["title"],
+            part_label=f"第 {item['number']} 章", order=tuple(item["articles"]),
+            accent=accent, number=item["number"],
+        )
+        volumes[key] = volume
+        books[key] = BookSpec(
+            title=volume.title, filename=filename, cover_lines=lines,
+            cover_mark=mark, volumes=(volume,), accent=accent,
+        )
+    if set(volumes) != set(presentation):
+        raise ValueError("The course map must contain the five supported chapters")
+    books["combined"] = BookSpec(
         title="游戏客户端入门手册",
         filename="游戏客户端入门手册_合订本_AppleBooks.epub",
-        cover_lines=("游戏客户端", "入门手册"),
-        cover_mark="DEV",
-        volumes=(CPP, GRAPHICS, UE),
-        accent=(76, 176, 255),
-        combined=True,
-    ),
-)
+        cover_lines=("游戏客户端", "入门手册"), cover_mark="DEV",
+        volumes=tuple(volumes.values()), accent=(76, 176, 255), combined=True,
+    )
+    return volumes, books
+
+
+VOLUMES, BOOK_BY_KEY = course_book_specs()
+CPP, GRAPHICS, UE, PROJECTS, STUDY = (VOLUMES[key] for key in ("cpp", "graphics", "ue", "projects", "study"))
+BOOKS = tuple(BOOK_BY_KEY.values())
 
 
 BOOK_CSS = r"""@charset "UTF-8";
@@ -391,28 +357,20 @@ def markdown_heading_anchor(text: str) -> str:
 
 
 def discover_markdowns(root: Path, volume: VolumeSpec) -> list[Path]:
+    """Export exactly the configured course, and fail on missing articles."""
     source_dir = root / volume.source_dir
-    # README files are repository navigation; EPUB navigation is generated below.
-    discovered = [
-        p for p in source_dir.rglob("*")
+    paths = [source_dir / name for name in volume.order]
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise FileNotFoundError("Course articles missing:\n- " + "\n- ".join(missing))
+    discovered = {
+        p.resolve() for p in source_dir.rglob("*")
         if p.is_file() and p.suffix.lower() == ".md" and p.name.casefold() != "readme.md"
-    ]
-    by_relative = {p.relative_to(source_dir).as_posix().casefold(): p for p in discovered}
-    ordered: list[Path] = []
-    seen: set[str] = set()
-    for name in volume.order:
-        key = PurePosixPath(name).as_posix().casefold()
-        path = by_relative.get(key)
-        if path is not None:
-            ordered.append(path)
-            seen.add(norm_path_key(path))
-    ordered.extend(
-        sorted(
-            (p for p in discovered if norm_path_key(p) not in seen),
-            key=lambda p: p.relative_to(source_dir).as_posix().casefold(),
-        )
-    )
-    return ordered
+    }
+    unexpected = sorted(discovered - {p.resolve() for p in paths})
+    if unexpected:
+        raise ValueError("Add new articles to tools/course-map.json before export:\n- " + "\n- ".join(map(str, unexpected)))
+    return paths
 
 
 def make_markdown_renderer() -> MarkdownIt:
@@ -466,6 +424,12 @@ def prepare_markdown(source_text: str) -> str:
     result: list[str] = []
     index = 0
     while index < len(lines):
+        if index not in protected_lines and lines[index] == "<!-- course-navigation:start -->":
+            end = next((n for n in range(index + 1, len(lines))
+                        if n not in protected_lines and lines[n] == "<!-- course-navigation:end -->"), None)
+            if end is not None:
+                index = end + 1
+                continue
         if index not in protected_lines and lines[index] == repository_navigation:
             index += 1
             continue
@@ -669,9 +633,9 @@ def render_chapter(
         image.attrib.pop("loading", None)
 
     relative_source = chapter.source.relative_to(repo_root).as_posix()
-    chapter_number = f"第 {chapter.index_in_volume} 章"
-    if len({item.volume_index for item in chapter_lookup.values()}) > 1:
-        chapter_number = f"{chapter.volume.part_label} · {chapter_number}"
+    # H1 already carries the course section number (for example 1.4).
+    # The kicker identifies its parent chapter; never renumber each article as a chapter.
+    chapter_number = chapter.volume.part_label
     fragment = serialize_children(wrapper)
     body = f"""<main epub:type="chapter">
       <p class="chapter-kicker">{escape(chapter_number)} · {escape(chapter.volume.title)}</p>
@@ -752,7 +716,7 @@ def build_part_page(part: PartPage, chapters: list[Chapter], book_title: str) ->
     body = f"""<main class="part-page" epub:type="part">
       <p class="part-number">{escape(part.volume.part_label)}</p>
       <h1 class="part-title">{escape(part.volume.title)}</h1>
-      <p>本编收录 {len(chapters)} 篇 Markdown 笔记。</p>
+      <p>本章收录 {len(chapters)} 篇 Markdown 正文。</p>
       <ol class="part-list">{links}</ol>
       <p class="chapter-nav"><a href="../nav.xhtml">返回目录</a></p>
     </main>"""
@@ -1148,15 +1112,15 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--root", type=Path, default=Path(__file__).resolve().parents[1],
-        help="Repository root containing the three chapter directories.",
+        help="Repository root containing the five course chapter directories.",
     )
     parser.add_argument(
         "--output", type=Path, default=None,
         help="Output directory; when omitted, use ROOT/output/AppleBooks_EPUB.",
     )
     parser.add_argument(
-        "--only", choices=("cpp", "graphics", "ue", "combined", "all"), default="all",
-        help="Build one volume, the combined book, or all four books.",
+        "--only", choices=("cpp", "graphics", "ue", "projects", "study", "combined", "all"), default="all",
+        help="Build one of five chapter volumes, the complete course, or all six books.",
     )
     return parser.parse_args(argv)
 
@@ -1166,13 +1130,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     repo_root = args.root.resolve()
     output_dir = (args.output or (repo_root / "output" / "AppleBooks_EPUB")).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    selection = {
-        "cpp": (BOOKS[0],),
-        "graphics": (BOOKS[1],),
-        "ue": (BOOKS[2],),
-        "combined": (BOOKS[3],),
-        "all": BOOKS,
-    }[args.only]
+    selection = BOOKS if args.only == "all" else (BOOK_BY_KEY[args.only],)
     reports = [build_book(book, repo_root, output_dir) for book in selection]
     print(json.dumps({"output_dir": str(output_dir), "books": reports}, ensure_ascii=False, indent=2))
     return 0
