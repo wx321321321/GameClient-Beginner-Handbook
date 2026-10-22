@@ -78,6 +78,7 @@ class Chapter:
     href: str
     title: str = ""
     headings: list[Heading] = field(default_factory=list)
+    source_anchors: dict[str, str] = field(default_factory=dict)
     xhtml: bytes = b""
 
 
@@ -384,6 +385,11 @@ def heading_slug(text: str, number: int) -> str:
     return f"sec-{number:03d}-{suffix}"
 
 
+def markdown_heading_anchor(text: str) -> str:
+    """Match the GitHub-style heading fragments used by these Markdown notes."""
+    return re.sub(r"[^\w\- ]", "", text.lower(), flags=re.UNICODE).replace(" ", "-")
+
+
 def discover_markdowns(root: Path, volume: VolumeSpec) -> list[Path]:
     source_dir = root / volume.source_dir
     # README files are repository navigation; EPUB navigation is generated below.
@@ -419,10 +425,8 @@ def make_markdown_renderer() -> MarkdownIt:
             "breaks": True,
         },
     )
-    # The notes contain C++ spellings such as new[](size_t), which CommonMark
-    # otherwise mistakes for an empty Markdown link.  There are no authored
-    # hyperlinks in the source set, while the separate image rule remains on.
-    renderer.disable(["link", "autolink", "linkify"])
+    # Authored source citations and cross-chapter references are real links.
+    # C++ spellings in inline code and fenced blocks are protected by the parser.
     renderer.use(tasklists_plugin, enabled=True, label=True)
     renderer.use(footnote_plugin)
     return renderer
@@ -449,57 +453,33 @@ def is_ascii_visual_line(line: str) -> bool:
 def prepare_markdown(source_text: str) -> str:
     """Apply presentation-only fixes without changing any source Markdown file."""
     repository_navigation = "[返回本章目录](README.md) · [返回手册首页](../README.md)"
-    expanded: list[str] = []
-    fence_character = ""
-    fence_length = 0
-    for line in source_text.split("\n"):
-        match = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
-        if match:
-            marker = match.group(1)
-            if not fence_character:
-                fence_character, fence_length = marker[0], len(marker)
-            elif marker[0] == fence_character and len(marker) >= fence_length:
-                fence_character, fence_length = "", 0
-            expanded.append(line)
-            continue
-        if fence_character:
-            expanded.append(line)
-        elif line == repository_navigation:
-            # EPUB has its own navigation. Keep the same text in code samples.
-            continue
-        else:
-            # These notes use the two literal characters "\n" as a visual line break.
-            expanded.extend(line.split(r"\n"))
-
-    outside_fence: list[bool] = []
-    fence_character = ""
-    fence_length = 0
-    for line in expanded:
-        match = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
-        if match:
-            marker = match.group(1)
-            outside_fence.append(False)
-            if not fence_character:
-                fence_character, fence_length = marker[0], len(marker)
-            elif marker[0] == fence_character and len(marker) >= fence_length:
-                fence_character, fence_length = "", 0
-            continue
-        outside_fence.append(not fence_character)
+    # Let Markdown identify code and real tables before applying the legacy
+    # ASCII-diagram heuristic. A pipe-delimited table is not a text diagram.
+    # In particular, never expand literal backslash-n: it is meaningful code.
+    lines = source_text.split("\n")
+    protected_lines: set[int] = set()
+    parser = MarkdownIt("commonmark").enable("table")
+    for token in parser.parse(source_text):
+        if token.type in {"fence", "code_block", "table_open"} and token.map:
+            protected_lines.update(range(*token.map))
 
     result: list[str] = []
     index = 0
-    while index < len(expanded):
-        if outside_fence[index] and is_ascii_visual_line(expanded[index]):
+    while index < len(lines):
+        if index not in protected_lines and lines[index] == repository_navigation:
+            index += 1
+            continue
+        if index not in protected_lines and is_ascii_visual_line(lines[index]):
             end = index
-            while end < len(expanded) and outside_fence[end] and is_ascii_visual_line(expanded[end]):
+            while end < len(lines) and end not in protected_lines and is_ascii_visual_line(lines[end]):
                 end += 1
             if end - index >= 3:
                 result.append("```text")
-                result.extend(expanded[index:end])
+                result.extend(lines[index:end])
                 result.append("```")
                 index = end
                 continue
-        result.append(expanded[index])
+        result.append(lines[index])
         index += 1
     return "\n".join(result)
 
@@ -529,7 +509,7 @@ class AssetRegistry:
 
 def is_external_url(value: str) -> bool:
     scheme = urlsplit(value).scheme.casefold()
-    return scheme in {"http", "https", "mailto", "tel", "data"}
+    return value.startswith("//") or scheme in {"http", "https", "mailto", "tel", "data"}
 
 
 def resolve_local_reference(source: Path, value: str, repo_root: Path) -> Path | None:
@@ -633,6 +613,9 @@ def render_chapter(
         previous_level = normalized_level
 
     used_ids: set[str] = set()
+    used_source_anchors: set[str] = set()
+    chapter.headings.clear()
+    chapter.source_anchors.clear()
     for number, node in enumerate(heading_nodes, start=1):
         text = clean_text("".join(node.itertext())) or f"小节 {number}"
         candidate = heading_slug(text, number)
@@ -641,6 +624,14 @@ def render_chapter(
         used_ids.add(candidate)
         node.set("id", candidate)
         chapter.headings.append(Heading(level=int(node.tag[-1]), text=text, element_id=candidate))
+        base_anchor = markdown_heading_anchor(text)
+        source_anchor = base_anchor
+        duplicate = 0
+        while source_anchor in used_source_anchors:
+            duplicate += 1
+            source_anchor = f"{base_anchor}-{duplicate}"
+        used_source_anchors.add(source_anchor)
+        chapter.source_anchors[source_anchor] = candidate
 
     for pre in wrapper.xpath(".//pre"):
         code_nodes = pre.xpath("./code")
@@ -677,18 +668,6 @@ def render_chapter(
         image.attrib.pop("srcset", None)
         image.attrib.pop("loading", None)
 
-    for link in wrapper.xpath(".//a[@href]"):
-        value = (link.get("href") or "").strip()
-        if not value or value.startswith("#") or is_external_url(value):
-            if is_external_url(value):
-                link.set("rel", "external")
-            continue
-        target = resolve_local_reference(chapter.source, value, repo_root)
-        target_chapter = chapter_lookup.get(norm_path_key(target)) if target is not None else None
-        if target_chapter is not None:
-            fragment = urlsplit(value).fragment
-            link.set("href", target_chapter.href.split("/", 1)[-1] + (f"#{fragment}" if fragment else ""))
-
     relative_source = chapter.source.relative_to(repo_root).as_posix()
     chapter_number = f"第 {chapter.index_in_volume} 章"
     if len({item.volume_index for item in chapter_lookup.values()}) > 1:
@@ -702,6 +681,61 @@ def render_chapter(
       <p class="chapter-nav"><a href="../nav.xhtml">返回目录</a></p>
     </main>"""
     chapter.xhtml = xhtml_document(f"{chapter.title} — {book_title}", body)
+
+
+def rewrite_chapter_links(
+    chapters: list[Chapter], repo_root: Path, warnings: list[str]
+) -> None:
+    """Resolve links only after every chapter's headings have been indexed."""
+    lookup = {norm_path_key(chapter.source): chapter for chapter in chapters}
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    documents = {chapter.href: etree.fromstring(chapter.xhtml, parser) for chapter in chapters}
+    ids = {href: set(root.xpath("//@id")) for href, root in documents.items()}
+    for chapter in chapters:
+        root = documents[chapter.href]
+        # Leave the generated EPUB navigation alone; only rewrite authored links.
+        links = root.xpath('//*[@class="markdown-body"]//x:a[@href]', namespaces={"x": XHTML_NS})
+        for link in links:
+            value = (link.get("href") or "").strip()
+            if is_external_url(value):
+                link.set("rel", "external")
+                continue
+            split = urlsplit(value)
+            target = resolve_local_reference(chapter.source, value, repo_root) if split.path else chapter.source
+            target_chapter = lookup.get(norm_path_key(target)) if target is not None else None
+            if target_chapter is not None:
+                href = posixpath.relpath(target_chapter.href, posixpath.dirname(chapter.href))
+                fragment = unquote(split.fragment)
+                if fragment:
+                    resolved = target_chapter.source_anchors.get(fragment, fragment)
+                    if resolved in ids[target_chapter.href]:
+                        href += f"#{resolved}"
+                    else:
+                        warnings.append(f"{chapter.source}: unknown section; linked to chapter start: {value}")
+                        link.set("title", "原小节锚点未匹配，跳到该章开头")
+                link.set("href", href)
+                continue
+
+            # A stand-alone volume cannot link to a file outside its EPUB.
+            # Preserve the authored label and repository reference as readable
+            # text instead of emitting a broken file:// or relative hyperlink.
+            exists = target is not None and target.exists()
+            reason = "本册未收录" if exists else "引用目标缺失"
+            reference = value
+            if target is not None:
+                try:
+                    reference = target.relative_to(repo_root).as_posix()
+                    if split.fragment:
+                        reference += f"#{unquote(split.fragment)}"
+                except ValueError:
+                    pass
+            warnings.append(f"{chapter.source}: {reason}: {reference}")
+            link.tag = f"{{{XHTML_NS}}}span"
+            link.attrib.pop("href", None)
+            link.set("class", "source-reference")
+            note = etree.SubElement(link, f"{{{XHTML_NS}}}small")
+            note.text = f"（{reason}，仓库路径：{reference}）"
+        chapter.xhtml = etree.tostring(root, encoding="utf-8", xml_declaration=True, doctype="<!DOCTYPE html>")
 
 
 def nav_subheadings(chapter: Chapter) -> list[Heading]:
@@ -1052,6 +1086,7 @@ def build_book(book: BookSpec, repo_root: Path, output_dir: Path) -> dict[str, o
     markdown = make_markdown_renderer()
     for chapter in chapters:
         render_chapter(chapter, repo_root, book.title, markdown, assets, chapter_lookup, warnings)
+    rewrite_chapter_links(chapters, repo_root, warnings)
 
     parts: list[PartPage] = []
     if book.combined:

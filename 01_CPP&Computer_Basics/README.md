@@ -19,7 +19,7 @@
 | [设计模式](design-patterns.md) | 单例、工厂、策略、观察者与事件系统 |
 | [欧拉角与四元数](rotations-and-quaternions.md) | 旋转表示、万向节锁、插值与 UE 的变换数据 |
 
-排序知识目前收录在 [STL 的排序类小节](stl-and-algorithms.md#排序类)，原先空白的 `sort.md` 已移除。
+排序、查找和区间修改收录在 [STL 的算法与容器配合](stl-and-algorithms.md#算法与容器配合)中；原先空白的 `sort.md` 已移除。
 
 ## 内存、硬件与操作系统
 
@@ -28,9 +28,9 @@
 | [计算机组成原理](computer-architecture.md) | CPU、数值表示、存储层次、缓存一致性、指令、中断与异常 |
 | [内存模型与编译管线](memory-and-compilation.md) | 地址转换、页表、编译链接、程序装入、内存分区与分配 |
 | [操作系统](operating-systems.md) | 系统调用、内核、文件组织、文件共享与空闲空间管理 |
-| [进程、线程与同步](processes-threads-and-synchronization.md) | 进线程、调度与通信、死锁、锁、原子操作、内存序与 UE 多线程 |
+| [进程、线程与同步](processes-threads-and-synchronization.md) | 进程与线程、调度与通信、生命周期、锁与条件变量、死锁、原子操作、内存序与 UE 任务 |
 
-缓存与地址转换在组成原理、内存笔记中各有不同上下文；RAII 锁的用法在指针笔记中，锁和同步机制在进线程笔记中。
+组成原理从硬件解释缓存与指令，内存笔记串起地址转换、编译装入和对象存储；指针笔记解释所有权与 RAII，线程笔记进一步解释共享状态的同步。
 
 ## 网络与脚本
 

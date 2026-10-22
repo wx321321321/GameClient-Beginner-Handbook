@@ -10,7 +10,7 @@
 ## 对象与运行时机制
 
 - [UE 垃圾回收与反射](garbage-collection-and-reflection.md)：UObject、可达性、对象指针、GC 优化、UHT 与属性同步。
-- [UE 运行时类型检查](runtime-type-checking.md)：原有 StaticClass、IsA 与 Cast 速记。
+- [UE 运行时类型检查](runtime-type-checking.md)：UClass 元数据、StaticClass / GetClass、IsA 与 Cast，并区分标准 C++ RTTI。
 
 ## 关联阅读与素材
 

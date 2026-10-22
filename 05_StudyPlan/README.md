@@ -8,13 +8,13 @@
 
 ## 算法练习
 
-- [LeetCode 刷题清单](leetcode-practice.md)：待攻克题目与 Day 10–60 题单。
+- [LeetCode 刷题清单](leetcode-practice.md)：22 条重点题记录与 Day 10–60 的 388 条练习安排，保留原题单顺序。
 - [LeetCode 复盘记录](leetcode-review.md)：目前尚无记录，包含可继续填写的复盘模板。
 
 ## 面试与代码训练
 
 - [C++ 与计算机基础面试刷题提示词](cpp-cs-interview-drill-prompt.md)：可复制使用的出题与评分规则。
-- [手撕代码速查](coding-reference.md)：字符串与数字转换的原有速记。
+- [手撕代码速查](coding-reference.md)：字符串与数字转换、解析位置、进制、异常和调用示例。
 - [C++ / 操作系统复习代码](../examples/cpp-os-review-2026-09-05.cpp)：独立代码示例。
 
 ## 参考资料

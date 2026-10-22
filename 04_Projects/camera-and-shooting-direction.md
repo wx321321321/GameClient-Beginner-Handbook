@@ -2,335 +2,217 @@
 
 [返回本章目录](README.md) · [返回手册首页](../README.md)
 
-## 镜头
+相机系统先确定“从哪里看、看向哪里”，射击系统再用镜头与瞄准状态生成射线。两者相关，却不是简单把相机朝向直接当成最终命中方向：后座采样时机、瞄具偏移、散布和弹道分段都会改变结果。
 
-### 业务层：
+本文记录 S18 / 弥赛亚项目中的类名、字段和流程。它们是原工程约定，仓库没有对应源码；未能证实的公式和参数保留为核对线索，不当成通用引擎结论。
 
-### 调用链：
+## 两台相机分别交给哪个渲染 Pass
 
-#### 渲染底层：
+渲染管线已经约定两条入口：
 
-##### 渲染管线内部写好了渲染逻辑：
-
-```
+```text
 主世界 Pass
-读取 EngineCamera
-绘制 DEFAULT RenderSet
+→ 读取 EngineCamera
+→ 绘制 DEFAULT RenderSet
+
 HUD Sight Pass
-从 OpticalSightCamera 读取 HudCamera
-绘制 HUD_SIGHT RenderSet
+→ 从 OpticalSightCamera 取得 HudCamera
+→ 绘制 HUD_SIGHT RenderSet
 ```
 
-所以，只要对两个Icamera对象：EngineCamera、HudCamera进行操作就好。
+`ICamera` 是相机类型接口，不是一台全局唯一的相机。正式战斗主链里的两个实例分别是：
 
-```
-ICamera 是一个类，不是唯一的一台相机。S18正式战斗主链里主要有两个不同的 ICamera 实例。
-world Camera
-MEngine.GetGameplay().Player.Camera它负责渲染：地图角色建筑敌人世界特效,Controller通过 _ControlledCamera 指向它。
-HUD Camera
-genv.hud_camera它主要负责第一人称的：手枪瞄具第一人称附属模型,Controller通过 _AffiliatedCamera 指向它。渲染时，会把1p的手和枪打上不同的renderset，当3p镜头，隐藏1p手枪的set，渲染世界。
-世界相机和 HUD 相机的位置、朝向完全一样，只是fov有差别
-```
+| 实例 | 原项目入口 | Controller 指向 | 主要用途 |
+| --- | --- | --- | --- |
+| 世界相机 | `MEngine.GetGameplay().Player.Camera` | `_ControlledCamera` | 地图、角色、建筑、敌人、世界特效 |
+| HUD 相机 | `genv.hud_camera` | `_AffiliatedCamera` | 第一人称手、枪、瞄具和附属模型 |
 
-#### space与相机管理器：
+第一人称手枪模型被分到对应 RenderSet；切第三人称时隐藏相应集合。原笔记中两台相机最终使用相同位置和朝向，但 FOV 可以不同。这样第一人称枪械的透视表现可以独立调节，不必改变世界镜头的视野。
 
-##### space是当前的游戏场景，根据模式而来。在创建了space后，space会创建一个camera逻辑对象，camera逻辑对象则是创建一个camera管理器，作为相机的核心。
+## 从 space 到 CameraRuntimeInfo
 
-```
+`space` 表示当前玩法场景。原项目在创建 space 后建立相机逻辑对象，再创建相机管理核心 `CameraController`：
+
+```text
 CameraController
 ├─ LocateBlendTree
 │  └─ FPS/TPS Placer 或 Blender
-│
 ├─ SensorBlendTree
 │  └─ Checker → TpsCollider → CameraCollider
-│
 ├─ PostProcessorBlendTree
 │  └─ CameraShaker
-│
-├─ Cameraruntimeinfo*mCurrentCamInfo
-├─ ICamera* ControlledCamera;
-└─ ICamera* AffiliatedCamera;
+├─ CameraRuntimeInfo* mCurrentCamInfo
+├─ ICamera* ControlledCamera
+└─ ICamera* AffiliatedCamera
 ```
 
-controlledcamera指向世界相机，affiliatercamera指向HUD相机。
+这三棵树分别负责理想机位、环境修正和后处理。Controller 组织更新，把中间结果写入 `mCurrentCamInfo`，最后再统一写给两台 `ICamera`。
 
-##### cameraruntimeinfo：相机管理器内部计算的数据载体。
+### RuntimeInfo 保存什么
 
-```
-它使用五个主要字段：
-target	镜头观察的目标点
-direction	从镜头位置指向 target 的向量，包含距离
-roll	镜头侧倾
+原笔记记录的主要字段是：
+
+```text
+target       观察目标点
+direction    从相机指向 target 的向量，包含距离
+roll         镜头侧倾
 世界相机 FOV
-HUD相机 FOV
-最重要的一点
-RuntimeInfo 没有 position。
-镜头位置由 Controller 计算：
+HUD 相机 FOV
 ```
 
-相机管理器自上而下更新，写入currentcaminfo中，最后的处理结束后，写入到ControlledCamera和AffiliatedCamera中。
+这份记录中没有独立 `position`，Controller 由下面的关系求位置：
 
-##### placer：分为cpp原生的placer和python包装后，带有s18逻辑的placer
-
-###### Python 包装器负责什么
-
-```
-它负责理解游戏业务：
-• 当前武器及武器配置
-• ADS、换弹、开火状态
-• Recoil 状态机
-•Jitter、RollShake、BurstShake
-• 玩家鼠标输入
-创建并挂载Easing、Mover、Blender
-读取角色、手模、骨骼等业务对象
-• 把结果写给底层C++ Placer
+```text
+cameraPosition = target - direction
 ```
 
-###### C++ Placer 负责什么
+这里的 `direction` 不是单位向量。若把它误当成归一化方向，便会丢掉相机与目标之间的距离。
 
-```
-C++对象负责底层几何计算：
-text
-保存 _Direction
-保存 _Roll
-保存 _Fov
-保存 Target、offset
-消费 CameraEasing/Mover
-每帧计算 target和direction
-写入 CameraRuntimeInfo
-```
+### Placer 的业务层与几何层
 
-它回答一个问题：暂时不考虑穿墙、震屏和最终写入，这一帧镜头理论上应该在哪里、朝哪里？生成本帧的 CameraRuntimeInfo
+Python 包装器理解游戏状态：当前武器及配置、ADS、换弹、开火、Recoil 状态机、Jitter、RollShake、BurstShake、鼠标输入，以及角色、手模、骨骼等对象。它创建和挂载 Easing、Mover、Blender，把业务参数交给底层。
 
-```
-不同玩法的几何算法不同：
-FpsPlacer：镜头固定在眼睛附近
-TpsPlacer：镜头围绕角色
-AimPlacer：持续对准指定目标
-FollowPlacer：跟随另一个 Camera/Controller
-Orbit/PivotPlacer：围绕中心旋转
-BonePlacer：跟随骨骼
-FreeviewPlacer：自由镜头
-FramePlacer：读取固定 CameraFrame
-```
+C++ Placer 保存 `_Direction`、`_Roll`、`_Fov`、Target、offset，推进并消费 `CameraEasing` / Mover，再按机位规则计算本帧 `target`、`direction` 和其他参数。它先回答“暂不考虑碰撞和最终震屏，这帧镜头应当在哪里”。
 
-##### 核心变量：position，target，direction：
+原项目的 Placer 类型各有用途：
 
-```
-FPS 想让镜头留在眼睛位置，所以先算：cameraPosition = 眼睛位置 + offset
-玩家转头时改变 direction，然后配套改变：target = cameraPosition + direction
-因此转头过程中：旋绕世界
+| Placer | 机位规则 |
+| --- | --- |
+| `FpsPlacer` | 固定在眼睛附近 |
+| `TpsPlacer` | 围绕角色观察点 |
+| `AimPlacer` | 持续对准目标 |
+| `FollowPlacer` | 跟随另一 Camera / Controller |
+| `Orbit/PivotPlacer` | 围绕中心旋转 |
+| `BonePlacer` | 跟随骨骼 |
+| `FreeviewPlacer` | 自由镜头 |
+| `FramePlacer` | 读取固定 CameraFrame |
 
-TPS 想让镜头围绕角色，所以先算：
-target = 角色附近的观察点
-玩家旋转镜头时改变 direction，Controller 得到：cameraPosition = target - direction
-因此旋转过程中：围绕玩家
+FPS 先固定眼睛附近的位置，再由朝向算目标点；TPS 则先固定角色附近的目标点，再反推相机位置：
+
+```text
+FPS:
+cameraPosition = 眼睛位置 + offset
+target = cameraPosition + direction
+
+TPS:
+target = 角色附近观察点
+cameraPosition = target - direction
 ```
 
-##### 修改工具：Placer 每帧 Tick 时推进并消费 Easing/Mover，再结合输入和自身机位规则生成 CameraRuntimeInfo(cpp内部)
+所以 FPS 转头主要改变视线，TPS 转向还会让镜头位置绕角色移动。
 
-```
-CameraBlendTree
+### 混合、碰撞与震屏的执行位置
+
+```text
+LocateBlendTree
 └─ TpsPlacer
    ├─ _Easing
-   └─ _Mover`
+   └─ _Mover
 ```
 
-![alt text](assets/image-1.png)
+`CameraEasing` 提供随时间变化的参数，Mover 提供连续移动相关结果。原笔记把它概括为速度，具体返回的是速度、位移还是其他量需查各 Mover 实现。
 
-```
-CameraEasing	给 Placer 提供随时间变化的值
-Mover	产生连续移动结果(速度)
-```
+![Placer 与相机修改工具原笔记图](assets/image-1.png)
 
-##### LocateBlendTree：下面挂载placer
+Locate 树可能只有一个 Placer，也可以在 FPS 转倒地等状态切换时同时求多个结果，再由 Blender 过渡。随后 Sensor 树处理碰撞修正，PostProcessor 树下的 Shaker 计算震动并叠加到 RuntimeInfo。最终只在出口把完整结果应用到 ControlledCamera 和 AffiliatedCamera，避免业务模块各自覆盖最终相机。
 
-```
-CameraBlendTree
-└─ TpsPlacer
-   ├─ _Easing
-   └─ _Mover`
-```
+## 普通枪：先确定基准射线，再加入散布
 
-placer是一种几何层的计算，一颗blendtree下大概率只有一个placer，但偶尔会有两个，如fps到倒下的过程中，就需要同时挂两个placer，对结果进行过渡。
-placer每一帧会tick，结合身上的easing和mover来对最终状态进行一个修改，从而输出计算结果写入runtimeinfo中。
+普通枪由 `GunSpellWorker` 处理，霰弹枪由 `ShotgunSpellWorker` 处理。开火预热和动画 Cue 的上下文见[射击框架与开火链路](shooting-pipeline.md)。
 
-##### SensorBlendTree：进行碰撞的检测。
+### 采样相机时机
 
-##### PostProcessorBlendTree ：后处理
+普通枪在本发后座逻辑 Tick 前缓存镜头方向，避免刚产生的后座反过来改变同一发的初始方向。每次开火事件都应使用本次约定的采样点，不能拿任意时刻的相机朝向替代。
 
-其实就是在这下面挂shaker，tick计算出一个值，加到runtimeinfo上。
+然后确定射线穿过屏幕哪个点：
 
-##### 最后将runtimeinfo里面的计算结果，分别写入到两个icamera对象中。
+- 普通射击使用屏幕中心，由 `EngineCamera` 将二维坐标转换为三维射线。
+- ADS 开镜根据 `aimbone` 与相机的相对位置进行投影，计算屏幕 XY 偏移，再加到瞄准点上。
+- 使用四倍镜、八倍镜等瞄具时，还会涉及瞄具/HUD 的方向修正；世界相机与 HUD FOV 不同，二者的投影参数不能混用。
 
-## 子弹方向设计方向：
+原笔记分别记录了“开镜时修正瞄准方向”和“散布后再做 HUD 修正”。其精确调用顺序需查 Worker，不能在没有源码的情况下合成唯一流程。
 
-### 思路：
+### 散布状态怎样更新
 
-#### 普通子弹：
+原项目普通枪的记录是 ADS 当前不产生散布，腰射则综合移动、姿态和连发状态。该规则仅适用于笔记所记版本，不是所有游戏的 ADS 规则。
 
-先生成一条基础方向，再在一个圆锥里随机偏一次；之后还会经过瞄具 HUD 修正和重力分段，所以命中时的 hit_dir 可能已不同于初始方向
+```text
+LastScatterAngle       积累的散布状态
+ShootScatterAngleMin   最小散布
+ShootScatterAngleMax   最大散布
 
-#### 散弹枪：
-
-霰弹枪：先取一条中心方向，再生成“内圈随机弹丸 + 外圈等角度环形弹丸”；当前实现每颗弹丸独立飞行和穿透，但没有普通枪那套重力下坠
-
-### 流程：
-
-#### 1.确定这次开火交给谁处理
-
-普通枪：GunSpellWorker
-霰弹枪：ShotgunSpellWorker
-
-#### 2.短暂预热后正式开火，发出通知。
-
-##### 3.1对于普通枪，在进行后座逻辑tick前，先缓存当前的镜头方向。
-
-原因：如果先后座逻辑，造成的后座会影响这颗子弹的方向。所以每一次开火事件都要缓存当前方向。
-
-#### 4.1 确定射线穿过屏幕的哪个点：
-
-##### 如果是普通射击：直接用屏幕中心（屏幕中心是一个二维坐标，EngineCamera 用这个二维坐标生成三维射线）
-
-##### 如果是开瞄准镜射击：有个aimbone，其实就相当于对camera的位置进行了个偏移变换。
-
-计算：得到相对于camera位置，aimbone的位置，对camera透视投影，算出aimbone在XY上的偏移，加到中心点上。
-
-其实就是：镜头方向决定能看到的视野范围，而普通墙永远打在这片视野的中心点，而开镜会有偏移
-
-#### 5.1 转换成射线方向
-
-开镜，会叠加镜片的瞄准方向。
-eg：加了四倍镜八倍镜后，普通射击还是一样，但开镜不一样，会有一点偏移。
-
-#### 6.1 确定散布锥：
-
-现在已经得到无散布方向，确定散布角度：
-ADS：当前不产生散布。
-普通射击：从移动、姿态、连续开火中计算出来角度。
-
-```
-武器维护状态：
-LastScatterAngle 积累的散布
-ShootScatterAngleMin   // 最小散布
-ShootScatterAngleMax   // 最大散布
+AllScatterRatio = 移动/姿态倍率 × 瞄准状态倍率 × ADS 倍率 × 天赋或配件修正
+currentMin = ShootScatterAngleMin × AllScatterRatio
+currentMax = ShootScatterAngleMax × AllScatterRatio
 ```
 
-AllScatterRatio =移动/姿态倍率× 瞄准状态倍率× ADS倍率× 天赋或配件修正
+`SIPS` 是每发带来的散布增量，原记录表示它影响下一发，而不回改当前这一发。以 `SIPS = 0.8`、范围 1～10 为例，若当前积累值为 0，第一发先按下限 1 使用；之后积累为 0.8，第二发仍至少为 1。继续如何钳制、回落或叠加，需查实际更新函数。
 
-```
-调整本次允许的最小、最大散布：
-currentMin =ShootScatterAngleMin × AllScatterRatio
-currentMax =ShootScatterAngleMax × AllScatterRatio
-```
+### 两个随机数分别控制什么
 
-##### SIPS子弹散射每开一枪增加的扩散值角度
-
-SIPS不改变当前这一发
-SIPS增加的是下一发使用的散布状态
-eg ：SIPS为0.8，散布范围为1-10，第一枪，积累散布为0，所以散布为1，第二颗子弹为0.8,，所以散布为1......
-
-#### 7.1 求子弹的真正方向：
-
-##### 随机数：
-
-U = GunRandom.NextDouble();决定往哪个方位偏
-
-```
+```text
+U = GunRandom.NextDouble()  // 方位角
 U = 0    → theta = 0°
 U = 0.25 → theta = 90°
 U = 0.5  → theta = 180°
 U = 0.75 → theta = 270°
+
+V = GunRandom.NextDouble()  // 离中心的角度分布
 ```
 
-V = GunRandom.NextDouble();决定圆周上的角度
+原稿中的公式保留为待核对记录：
 
-```
-rawAngle = acos(2V - 1)%2（假设最大偏移为2）
-```
-
-算出来一个偏离basedir的方向
-
-#### 8.1 分段重力与命中处理：
-
-```
-散布、重力弹道、分段射线、客户端看到的命中
-→ 客户端计算
-是否接受这次命中、最终伤害、扣血
-→ 服务端处理
+```text
+rawAngle = acos(2V - 1) % 2  // 原稿假设最大偏移为 2
 ```
 
-##### 分段重力：根据帧率得到t将抛物线分段。
+它不能直接作为“圆锥内均匀散布”的公式：`acos` 的单位、`2` 表示角度还是弧度、取模的目的都没有说明，而且角度取模通常会改变分布。
 
-###### 初始信息：
+若目标是**立体角均匀的圆锥采样**，一种独立的数学对照是 `theta = 2πU`、`cos(phi) = 1 - V(1 - cos(alpha))`，其中 `alpha` 为半角，再把局部方向旋转到 `BaseDirection`。这只是核对实现时的参照，不代表原项目一定使用均匀分布。
 
-```
+## 普通枪弹道：命中方向来自当前飞行段
+
+客户端计算散布、飞行分段、碰撞与命中表现；服务器决定是否接受结果、最终伤害与扣血。子弹初始方向与最终 `hit_dir` 可能不同，因为后者来自发生碰撞时的飞行段。
+
+原数值例子采用 **Z 为初始前进方向、负 Y 为重力方向**，是该笔记的坐标示意，不要直接当作 UE 的 Z-up 世界坐标：
+
+```text
 D₀ = (0, 0, 1)
 V₀ = (0, 0, 800)
 G  = (0, -20, 0)
 Δt = 0.01
 ```
 
-###### 第一段计算：
+第一段使用恒定加速度运动：
 
-```
-V₀ × Δt= (0, 0, 8)+½GΔt²= 0.5 × (0,-20,0) × 0.0001= (0,-0.001,0)
-合起来：
-ΔP₀ = (0, -0.001, 8)
-意思是第一段：
-向前飞8个世界单位向下掉0.001个世界单位
-第一段方向：
-segmentDir₀ =normalize(0, -0.001, 8)
-然后客户端沿这个方向做第一段碰撞检测。
-同时更新速度：
-V₁ = V₀ + GΔt
-   = (0,0,800) + (0,-0.2,0)
-   = (0,-0.2,800)
+```text
+ΔP₀ = V₀Δt + ½GΔt²
+     = (0, 0, 8) + (0, -0.001, 0)
+     = (0, -0.001, 8)
+
+segmentDir₀ = normalize(0, -0.001, 8)
+V₁ = V₀ + GΔt = (0, -0.2, 800)
 ```
 
-###### 第二段：同理
+即这一段前进 8 个世界单位，下落 0.001 个世界单位。沿该段做碰撞，下一段再使用更新后的速度继续。若还有速度衰减等配置，就不能只用这组恒定重力公式覆盖全部实现。
 
-每一段客户端都会检查：
-场景碰撞，角色骨骼碰撞，穿透目标
-如果命中了带命中信息，服务器校验，计算伤害。
+每段检查场景、角色受击盒及穿透结果。原记录的终止条件包括：
 
-###### 停止：
+- 命中不可继续穿透的目标，或穿透能力耗尽。
+- 达到最大射程，或速度接近零。
+- 玩家/武器销毁，需要取消关联任务。
+- 超过保护上限 **512 段**。
 
-```
-撞到不可继续穿透的目标。
-穿透能力耗尽。达到最大射程。
-子弹速度降到接近零。
-玩家或武器被销毁。
-超过保护上限 512 段
-```
+碰撞精度直接取决于分段长度和曲率。如果每次恢复使用更长的 Δt，线段对抛物线的近似更粗；若采用固定子步，则画面帧率本身不必决定碰撞精度。原项目的任务定时约 33 ms，是否补子步需回查实现。
 
-真正会受帧率影响的是碰撞精度：高帧率：很多短射线逼近抛物线 .低帧率：少量长射线逼近抛物线
+## 霰弹枪：一枪生成多条独立弹道
 
-#### 3.2 对于霞弹枪 ：没有缓存，直接读取镜头方向
+原记录中霰弹枪直接读取当时镜头方向，没有普通枪那套提前缓存；若后座或 Easing 已写入 `EngineCamera`，就可能影响本次中心方向。它与普通枪的主要差异如下：
 
-相机后坐或 Easing 如果在这之前已经写入 EngineCamera，就会影响本次霰弹中心方向
+1. 从配置取得 pellet 总数、内圈数量与外圈数量。
+2. 只计算一次整枪主散布半角 `α`。它决定外圈圆环的主要范围，也缩放内圈范围。
+3. 内圈每颗弹丸独立取 U、V，按配置范围产生随机偏移。
+4. 外圈弹丸先按等角度分布在偏离中心 `α` 的圆环上，再读取 `ShotgunSpreadRandomAngle`，为每颗弹丸添加独立随机扰动。
+5. 每颗弹丸独立进行碰撞和穿透。原记录的该实现没有普通枪那套重力下坠流程。
 
-#### 4.2 根据配置 决定一枪生成多少颗 pellet，以及多少颗属于内圈、多少颗属于外圈
-
-全在配置里面。
-
-#### 5.2 计算整枪的主散布半角 α  只调用一次。
-
-和普通枪一样。
-决定外圈pellet的主圆环半径，参与缩放内圈pellet的随机范围
-
-#### 6.2 从配置中读取比例，计算内圈范围
-
-#### 7.2 内圈偏移：
-
-每颗都会重新取自己的 U、V，不是所有内圈 pellet 共用同一个随机偏移
-随机的。
-
-#### 8.2 外圈偏移：
-
-先把pellet 均匀分布在圆周上，且距离圆心偏移固定，都用 α 。
-再给每一颗子弹加一个随机扰动：读配置ShotgunSpreadRandomAngle，再像之前普通枪一样，算角度，算偏移，给每颗子弹单独加上。
-
-#### 9.2 视觉表现：
-
-对每颗子弹射线检测，800m内如果碰到东西，就在物体上，否则500m触发后续视觉。
+原稿还记录了视觉落点：每颗射线在 **800 m** 范围内命中则取命中点，否则用 **500 m** 的位置触发后续表现。这是视觉效果参数线索，不能直接等同于伤害射程；单位和对应配置也应核对原工程。

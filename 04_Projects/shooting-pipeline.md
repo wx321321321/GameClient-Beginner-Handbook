@@ -2,213 +2,148 @@
 
 [返回本章目录](README.md) · [返回手册首页](../README.md)
 
-## 帧：一帧是游戏主循环完整执行一次
+这篇沿“左键按下 → 输入分发 → 开火检查 → Spell → 动画 Cue → 子弹任务 → 命中上报”梳理原项目。关键是区分**有开火意图**、**进入开火状态**与**真正产生一发攻击**，三者发生在不同节点。
 
-```
-读取输入
-→ 更新游戏逻辑 Update/Tick
-→ 更新动画
-→ 更新物理
-→ 更新场景
-→ 提交渲染
-→ 显示画面
-```
+`MEngine`、`GameInputController`、Spell、Graph、`AsyncFuncNode` 等均为原项目名称，下面保留原笔记的调用线索。仓库没有对应工程源码，具体拼写、回调签名及先后顺序仍需按实际版本核对。
 
-## shoot pipeline
+## 从引擎输入到业务动作
 
-### 一.左键按下->引发gameinput_controller模块启动->调用最终开火函数
+### 引擎与脚本绑定层
 
-#### 1.引擎的作用：
+游戏进程启动后，C++ 引擎初始化 Engine，以及 Gameplay、Player、World、Physics、Render 等子系统。Python 侧通过 `MEngine` 等绑定接口访问这些能力；不是 Python 天生不能调用 C++，而是两种运行时之间需要绑定层转换参数和调用。
 
-（1）启动游戏进程，os分配空间， 执行已经编译好的弥赛亚C++引擎代码，初始化Engine对象。
-（2）初始化Gameplay，Player，World，Physics，Render等子系统
-（3） 创建MEgine，创建py端的引擎对象，给py代码逻辑提供功能绑定层。（客户端逻辑不能直接调用cpp的函数，作为中间接口，并提供一些功能的扩展）
-（4）有些逻辑直接使用MEngine的相关函数。
-
-```
+```text
 Engine
---Gameplay         
-        ----player：主控
-        ----sceario：当前世界
---程序信息
---帧与事件
---窗口
---脚本通信、文件与路径
+├─ Gameplay
+│  ├─ Player：本地主控入口
+│  └─ Scenario：当前世界（原稿写作 sceario，源码拼写待核对）
+├─ 程序信息
+├─ 帧与事件
+├─ 窗口
+└─ 脚本通信、文件与路径
 ```
 
-#### 2.事件绑定与触发
+原稿把一帧概括为读取输入、更新逻辑、动画、物理、场景，再提交渲染和显示。这个模型有助于理解“事件何时被消费”，但它不是所有引擎固定的串行顺序：渲染与显示可以流水并行，动画和移动也会有自己的依赖调度。
 
-##### MEngine.Player：本地玩家总控制入口
+`MEngine.Player` 提供的相关入口包括：
 
-```
-Player.BindEvent       输入事件
+```text
+Player.BindEvent       输入事件绑定
 Player.Camera          当前摄像机
 Player.Navigator       导航、视角控制
 Player.Manipulator     编辑器操作器
 Player.PrincipleRole   当前主要控制/观察的场景角色
 ```
 
-##### 将按下鼠标左键等一堆事件，在py侧通过接口绑定到player对应函数上。
+Python 注册输入回调后，C++ 输入层检测按键，调用绑定的脚本入口。`DesktopInput` 接收并广播原始输入，监听它的 `GameInputController` 再执行游戏级分发。
 
-##### cpp检测到鼠标左键按下，找到对应py回调，调用函数。
+### 左键如何变成配置里的开火函数
 
-##### 触发GameInputController.OnMouseLDown
-
-#### 3.通用分发
-
-##### DesktopInput：负责接收并广播引擎原始输入
-
-使用观察者模式，将左键按下事件，传递给监听他的gameinputcontroller
-
-##### GameInputController:py侧游戏的输入分发器
-
-##### 函数做了什么：
-
-```
-记录左键状态（鼠标专用状态）
-调用 self.OnKeyDown(0, DesktopInput.MOUSE_L)->记录通用按键状态->调用self.DoKeyUpDownFunc
+```text
+左键按下
+→ DesktopInput 广播
+→ GameInputController.OnMouseLDown
+→ 记录鼠标左键状态
+→ self.OnKeyDown(0, DesktopInput.MOUSE_L)
+→ 记录通用按键状态
+→ self.DoKeyUpDownFunc
 ```
 
-##### self.DoKeyUpDownFunc 通用按键处理流程：
+通用按键处理先检查改键系统是否消费，再经过大厅、特殊玩法、UI 等分支，最后才查询动作配置。这样同一个按键可以在不同上下文里有不同含义。
 
-改键系统是否消费->大厅->特殊玩法->UI->查询配置->调用处理函数。
+原笔记记录的一个实际调用是：
 
-#### 4.处理函数 DoKeyResponseFunc(39, True, 257)
-
-##### 查询配置表：
-
-根据键值39，计算cache，去配置表内查对应的func表如：
-
+```python
+DoKeyResponseFunc(39, True, 257)
 ```
+
+其中通过键值 `39` 查询缓存/配置，得到按下和松开的处理名，例如：
+
+```text
 OnPlayerAttackForMouseL
-OnPlayerENdAttackForMouseL
+OnPlayerENdAttackForMouseL  // 原记录拼写，待源码确认
 ```
 
-因为是true，选第一个，随后进行一个拼接，得到如：PlayerInput_OnPlayerAttackForMouseL的函数名
+`True` 选择按下动作，再拼出 `PlayerInput_OnPlayerAttackForMouseL`。这时只确定函数名，还要按项目分发规则寻找实现对象：
 
-##### 查询实现对象：目前只知道函数名，但不知道它的层次，比如开火应该是角色层，面板显示是ui层，所以挨个查：
+1. `logic_input`：特殊玩法输入对象。
+2. `contrller_player`：原笔记记录的当前角色入口，具体拼写待核对。
+3. 观战玩家：要求配置中允许该分支。
+4. `GameInputController` 自身。
 
-```
-logic_input:预留的特殊玩法输入接收对象。
-contrller_player:当前真正的角色对象
-观战玩家：需配置存在（上一步配置表里面存在对应的标志位）
-gameinputcontroller自身：
-```
+所以左键在正常状态可能开枪，在载具里可能开炮，在观战时可能切换视角，也可能由全局输入逻辑消费。
 
-eg：同样是左键开火：
+## 开火检查：意图尚未等于子弹
 
-```
-正常状态：角色开枪
-特殊状态：载具开炮
-观战状态：执行观战操作（切换视角）
-全局状态：输入控制器自己处理
-```
+`PlayerInput_OnPlayerAttackForMouseL` 先判断当前状态：濒死、操作 UI、禁用攻击等会阻止开火；持有道具时可能转为道具使用，使用后切枪，再重新走攻击流程。
 
-### 二.开火前检查：
+通过检查后设置开火标记并通知手模。拿刀时可能先做命中预测，帮助手部 Graph 选择表现。随后根据姿态分流，调用 `OnPlayerAttackBegin()` 并通知客户端其他模块。
 
-#### 1.PlayerInput_OnPlayerAttackForMouseL：开火判定函数：
+`OnPlayerAttackBegin()` 继续处理打药、救援、持枪等上下文，清理旧失败原因，再进入火器分支：
 
-判定条件，当前状态下是否能开火：
-
-```
-濒死状态不能攻击
-正在持有道具：跳转道具使用相关函数->使用后切枪->切回来之后重新走链路
-操作UI不能开火
-是否禁止开火
-```
-
-通过了所有检查：打一个开火标记，随后，通知给手摸,此时手部已经有了对应的表现
-
-##### 特殊处理：手模且拿刀：因为是否击中的手部动作不同，会做一个预测，来通知手graph的动作
-
-##### 根据姿态分流  确定调用函数self.OnPlayerAttackBegin()
-
-##### 通知客户端其他模块。
-
-#### 2.OnPlayerAttackBegin()
-
-依旧处理一些情况：如打药，救援，拿枪等，并清理旧失败原因，调用FIre
-
-#### 3.OnPlayerFireBegin
-
-```
+```text
 OnPlayerFireBegin
 → 清理旧输入缓存
 → try_fire_start = True
 → 取得当前枪械
 → 判断枪械类别
-→ 普通枪进入_OnPlayerFire_Normal(fire_mode, True)->TryAttack()
+→ _OnPlayerFire_Normal(fire_mode, True)
+→ TryAttack()
 ```
 
-### 三.开火
+## Spell：把一次战斗行为组织成生命周期
 
-#### spell： 对可执行战斗行为的统一抽象,存放在角色的spell_mgr.current_spell中
+Spell 是原项目对可执行战斗行为的统一抽象。当前行为通过角色的 `spell_mgr.current_spell` 管理，记录的种类包括：
 
-```
-可以把它理解为项目自己实现的“通用技能/行为系统”：
+```text
 gun_spell       普通枪械
-shotgun_spell   霰弹枪逻辑
+shotgun_spell   霰弹枪
 grenade_spell   投掷物
 medicine_spell  药品
 melee_spell     近战
 ```
 
-里面提供完整的周期函数：
+周期接口把“开始动作”和“发生攻击”分开：
 
-```
-SpellStart()      # 开始攻击，启动动画
-SpellStrike()     # 真正产生一发攻击
-SpellStop()       # 停止攻击
-SpellOnClear()    # 清理Spell实例
-```
-
-#### TryAttack():选择对应spell,找到执行函数
-
-```
-TryAttack
-→ 使用当前main_spell
-→ 查到code = gun_spell
-→ 找到TryAttack_gun_spell
-存放在角色的spell_mgr.current_spell中
+```text
+SpellStart()      开始行为，启动动画/控制状态
+SpellStrike()     真正产生一次攻击
+SpellStop()       停止行为
+SpellOnClear()    清理 Spell 实例
 ```
 
-#### TryAttack_gun_spell：
+`TryAttack()` 根据当前 `main_spell` 找到 `code = gun_spell` 等行为代码，再分派到 `TryAttack_gun_spell`。成功创建后的 Spell 记录到当前行为管理器；不要把 `TryAttack` 本身理解成每次都直接生成子弹。
 
-##### （1）.spell.SpellStart()：创建攻击控制器，还没有子弹。
+### 普通枪的一轮开火
 
-```
-通知动画开始开火：
-调用Caster.PlayFIreAction,同时通知handmodel和第三人称model的jumptofire
-handmodel.jumptofirestart：写变量，给graph发事件，放入graph的eventsqueue中，等下一次graphtick处理
-graph处理后，进入fire_first和fire_loop，并通过变量来控制循环动画的播放速度。
-```
-
-##### (2)graph一边，到达了出膛CUE：
-
-graph产生spell event cue 分发给python回调触发分发事件。
-
-##### （3）Cue 同时驱动镜头和 SpellStrike
-
-```
-使camera.placer的FSM转换状态，施加后座影响
-通过current_spell找回spellworker，扣一发弹药，标记has_strike，调用SpellStrike
+```text
+TryAttack_gun_spell
+→ SpellStart：创建/启动攻击控制逻辑
+→ Caster.PlayFIreAction（原记录拼写）
+→ 通知 handmodel 与第三人称 model 的 jumptofire
+→ handmodel.jumptofirestart 写 Graph 变量、投递事件
+→ 下次 Graph Tick 消费 eventsqueue
+→ 进入 fire_first / fire_loop
+→ 动画到达出膛 Cue
+→ Cue 分发到 Python
+→ 驱动后座状态与 SpellStrike
 ```
 
-##### （4） SpellStrike创建这一发子弹任务
+Graph 变量还控制循环动画播放速度。Cue 到来时，通过 `current_spell` 找回 Spell Worker，扣弹、设置 `has_strike`，再让 `SpellStrike` 创建该发子弹任务。镜头 Placer 的 FSM 同时参与后座处理；普通枪为了避免本发后座影响本发初始方向，会在相应后座更新前缓存方向，详见[相机系统与射击方向](camera-and-shooting-direction.md)。
 
-子弹任务以协程的方式，进行一个计算，如果有命中信息，发送到服务器。
+松开输入走停止链：
 
-##### （5） 松开鼠标后：逆链路
-
-```
-调用EndAttack->stopspell->清理
+```text
+EndAttack → stopspell → 停止动画/行为并清理相应状态
 ```
 
-### 四、角色身上的字段：
+停止当前开火与是否立即清空连续射击序号，是两个独立问题。
 
-一些字段挂在combatavatar身上，用于读取：
+## 射击字段与短暂停顿
 
-```
+原项目在 `CombatAvatar` 上维护这些字段，供武器、动画与后座逻辑读取：
+
+```text
 player.shoot_idx
 player.last_shoot_idx
 player.continuous_shoot_idx
@@ -217,15 +152,20 @@ player._is_shooting
 player.try_fire_start
 ```
 
-#### 1.角色创建时初始化
+原稿还出现 `self.is_shooting`；它与 `_is_shooting` 是属性封装还是不同字段，需查源码，不能整理时擅自合并。
 
-#### 2.左键按下，进入onplayerfirebegin时，
+| 时机 | 状态变化 |
+| --- | --- |
+| 角色创建 | 初始化射击字段 |
+| `OnPlayerFireBegin` | `try_fire_start = True`，表示尝试开火 |
+| 新一轮开火通过检查 | `RefreshShootIndexOnGunSpellStart()` 决定是否初始化射击序列 |
+| `SpellStart` | `self.spell_start = True`，行为已启动，但不代表出膛 |
+| 每个出膛 Cue | 更新本发、上一发和连续射击等计数 |
+| 松开攻击 | 结束开火状态，并按延迟策略处理序号 |
 
-try_fire_start设为真
+原笔记给出的新序列初始化值保留如下：
 
-#### 3.通过开火检查时，调用RefreshShootIndexOnGunSpellStart()，意为新一轮射击,随后创建spell
-
-```
+```python
 shoot_idx = 0
 last_shoot_idx = -1
 continuous_shoot_idx = 0
@@ -233,140 +173,77 @@ need_reset_recoil_start_state = True
 self.is_shooting = True
 ```
 
-#### 4.SpellStart()
+松开时调用 `TryClearShootIdxOnEndAttack()`，读取武器配置 `ShootIdxResetDelayTime` 并设置定时器。超过延迟才执行序号重置；若短时间内再次开火，则可能沿用之前的子弹序列，但动画要重新进入开火流程。
 
-self.spell_start = True 意为当前要开火，但可能子弹还没到
+这解释了原稿的矛盾：“松开时清零所有信息”不能与延迟重置同时成立。应分别核对即时关闭的状态标记、延迟清理的序号，以及重新开火时如何取消旧定时器。
 
-#### 5.每次射击cue到达：
+## 子弹任务：协程按时间推进弹道
 
-更新上述信息
+每次 `SpellStrike` 创建一个 `AsyncFuncNode`，保存 Generator、局部飞行状态与定时调度信息。这里的“异步”是原项目的协程调度，不表示自动新建一个线程。
 
-#### 6.松开左键时：
-
-将这些信息清零。
-
-### 五.短暂停下
-
-#### 1.松开时会调用TryClearShootIdxOnEndAttack()
-
-读取武器配置里面的ShootIdxResetDelayTime，设置定时器
-
-#### 2,超过定时器，执行清零逻辑
-
-#### 3.没超过定时器，子弹序列继续沿用，但动画已经结束。会重新之前的流程。
-
-#### 子弹命中计算：
-
-每一次spellstrike，会创建一个AsyncFuncNode A  里面记录着当前信息以及执行逻辑（判断到上次检测期间是否子弹命中），以及对应的timer，只有在timer到时后，才后进行对应逻辑的计算。
-利用的是协程：
-
-```
-某个定时器到期
-→ 主线程恢复对应Generator
-→ 计算一小段弹道
-→ 再次yield
-→ 主线程继续做其他事情
+```text
+定时器到期
+→ 主线程恢复对应 Generator
+→ 计算本次飞行段及碰撞
+→ yield，登记后续恢复时机
+→ 主线程继续其他任务
 ```
 
-##### AsyncFuncNode：子弹对象，保存Generator（局部信息如上一次时间，方向，当前速度，命中信息）
+原笔记记录：创建初期先做 **0.01 s / 10 ms** 的飞行计算，之后约每 **33 ms** 恢复一次。它与显示帧率不是同一个常量；实际弹道应使用真实经过的时间，需核对调度器如何补偿延迟。
 
-##### 创建子弹初期，会进行一个0.01s的预测飞行计算。
+任务保留的变量包括：
 
-##### 命中信息：命中后生成SpellResult→ SpellResult交给伤害系统，服务器进行校验。
-
-## 服务器做了什么
-
-### 左键输入和意图判断
-
-服务器完全不参与
-
-### 进入开火状态：
-
-#### TryAttack_gun_spell 通过后：
-
-调用：CallServer('EnterIsShootingStatus', True)，用于状态同步。
-
-### 调用spell函数，播放 Graph
-
-服务器完全不参与
-
-### Cue到达后：
-
-扣弹信息，服务器进行校验
-
-### 异步子弹命中：
-
-命中信息，服务器校验，同步
-
-## shoot direction
-
-如何判断一颗子弹的最终方向：
-
-### 步枪：
-
-#### 纯正方向：镜头到屏幕中心
-
-Basedirection
-
-#### 散射：
-
-在之前的基础上，通过读取枪支配置中，当前状态、连发次数，对应的散射参数，获得结果，如1.2,1.5，最终的散射半径就是1.8
-所以两次随机：第一次随机，定下圆上的方向，第二次随机，随机一个半径。从而得到最终的射击方向。
-
+```text
+bullet_fly_speed          当前标量速度
+bullet_fly_speed_v3       当前速度向量
+bullet_fly_range          最大射程
+gravity                   重力
+bullet_acceleration       速度衰减相关配置
+start_pos                 当前分段起点
+cur_fly_dist_v3           本段位移
+cur_bullet_dist           累计飞行距离
+cur_time                  上次更新时间
+penetrate_handler         剩余穿透能力及处理状态
+bullet_exclude_actor      已命中、后续需要排除的对象
 ```
-两次随机数：
-randU → theta：绕准星方向旋转的方位角
+
+### 每段碰撞怎样得到命中结果
+
+当前分段用起点和终点构成线段，依次完成：
+
+```text
+对场景物理世界执行 AllRaycast
+→ 对角色骨骼受击盒执行 Raycast
+→ 合并结果，按距离从近到远排序
+→ 判断材质、敌友、是否排除及能否继续穿透
+→ 生成 ShootEntityResult
+→ 汇总为 SpellResult
+→ 上传给服务端校验和伤害处理
+```
+
+先排序再判断穿透很关键：同一段射线可能穿过多个目标，近处的阻挡会改变后续目标是否可命中。客户端算出的碰撞结果与服务端最终接受的伤害不是一回事。
+
+## 客户端和服务器的职责边界
+
+| 阶段 | 原笔记记录的参与方 |
+| --- | --- |
+| 原始左键与本地输入分发 | 客户端执行，不直接把鼠标事件交给服务器 |
+| 本地 Graph 播放 | 客户端表现链 |
+| 进入射击状态 | 通过 `CallServer('EnterIsShootingStatus', True)` 通知服务器 |
+| Cue 到达与扣弹请求 | 客户端触发，服务器按协议校验相关信息 |
+| 命中结果 | 客户端提交，服务器校验并处理最终伤害/同步 |
+
+原稿的“服务器完全不参与”只适用于这里记录的输入和 Graph 调用路径，不能推导成服务器不检查攻击频率、弹药或行为合法性。具体校验范围尚无本地源码证明。
+
+## 方向计算在整条链中的位置
+
+普通枪先从相机与瞄准点生成 `BaseDirection`，再依据移动、姿态、连发和武器配置计算散布。原笔记中 `1.2 × 1.5 = 1.8` 是倍率相乘的例子，不代表所有武器固定使用这两个参数。
+
+```text
+randU → theta：绕准星方向的方位角
 randV → phi：偏离准星中心的角度
 ```
 
-### 散弹枪：
+这两个随机数决定偏向哪里、偏离多少；具体角度分布要看实现，不能简单称为随机半径。普通枪后续还可经历 HUD 瞄具修正、分段重力和穿透。
 
-#### 纯正方向：镜头到屏幕中央。
-
-#### 散射1：
-
-根据散射参数，计算出现有的散射倍数，是内环，外环共同的参数。
-
-#### 内环： 对于不同子弹，分别做一次类似于步枪普通子弹的散射。
-
-#### 外环：先将子弹在外环上均匀分布，随后每个子弹做一个r/2圆环的扰动
-
-## 设计命中判断：
-
-### 1.在射击管线中，每次cue到达后，会创建个异步事件+定时器
-
-#### 异步事件：记录当前子弹的信息，以及判断一段的命中。
-
-```
-bullet_fly_speed          # 当前标量速度
-bullet_fly_speed_v3       # 当前速度方向和大小
-bullet_fly_range          # 最大射程
-gravity                   # 重力
-bullet_acceleration       # 速度衰减
-start_pos                 # 当前分段起点
-cur_fly_dist_v3           # 本次分段位移
-cur_bullet_dist           # 已累计飞行距离
-cur_time                  # 上次更新时间
-penetrate_handler         # 剩余穿透能力
-bullet_exclude_actor      # 已经命中过、需要排除的对象
-```
-
-命中函数：根据起点，终点，连线与世界求命中
-
-##### 求命中方法：
-
-```
-对场景物理世界做一次AllRaycast
-对角色骨骼受击盒做一次Raycast
-合并所有结果，按照距离从近到远排序
-依次判断材质、敌友和穿透
-生成ShootEntityResult
-```
-
-##### 命中后：
-
-构造spellresult，上传给服务器，服务器校验。
-
-### 定时器：只有当过了一定时间，才会允许命中函数的计算
-
-开始时，会算一个10ms的， 随后，每33ms让命中函数调用一次
+霰弹枪先确定整枪中心和主散布，再分别生成内环随机弹丸、外环均匀分布弹丸，并对外环增加独立扰动。原稿“r/2 圆环”是一个范围描述，实际应以 `ShotgunSpreadRandomAngle` 等配置为准。每颗弹丸独立检测，方向与数值例子集中放在[相机系统与射击方向](camera-and-shooting-direction.md)，避免在两篇中维护互相矛盾的版本。
