@@ -1,0 +1,5 @@
+# Versions used to validate the EPUB builder (Python 3.12).
+lxml==5.2.1
+markdown-it-py==2.2.0
+mdit-py-plugins==0.3.0
+Pillow==10.4.0

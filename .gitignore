@@ -1,15 +1,9 @@
-# Local archives, unrelated work, and temporary conversion files
+# Local archives and temporary conversion files
 /.local-archive/
-/.tmp-codex-installer/
-/campus-repair-system/
-/stock/
 /tmp/
-/ocr_test.txt
 
-# Generated exports (keep the original learning source and reference PDF)
-/output/*
-!/output/cpp-os-review-2026-09-05.cpp
-!/output/pdf/
+# Generated exports; sources and reference material live in examples/resources
+/output/
 
 # Runtime/build files
 __pycache__/

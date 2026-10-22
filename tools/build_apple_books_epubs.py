@@ -2,8 +2,8 @@
 """Build Apple Books-friendly EPUB 3 files from the handbook Markdown notes.
 
 The builder intentionally has no Pandoc/Calibre dependency.  It creates a
-standards-shaped, reflowable EPUB, embeds referenced local images, rewrites
-Markdown links, and validates the resulting archive before reporting success.
+standards-shaped, reflowable EPUB, embeds referenced local images, generates
+navigation, and validates the resulting archive before reporting success.
 """
 
 from __future__ import annotations
@@ -102,20 +102,19 @@ CPP = VolumeSpec(
     title="C++ 与计算机基础",
     part_label="第一编",
     order=(
-        "ComputerOrganizationandArchitecture.md",
-        "os.md",
-        "computenet.md",
-        "Memory_Management&Compile_Pipeline.md",
-        "keywords.md",
-        "Pointer&Reference.md",
-        "Multi-State.md",
-        "Template.md",
-        "STL.MD",
-        "Thread&Lock.md",
-        "Design_Pattern.md",
+        "computer-architecture.md",
+        "operating-systems.md",
+        "computer-networks.md",
+        "memory-and-compilation.md",
+        "cpp-keywords-and-callables.md",
+        "pointers-and-references.md",
+        "classes-inheritance-and-polymorphism.md",
+        "templates.md",
+        "stl-and-algorithms.md",
+        "processes-threads-and-synchronization.md",
+        "design-patterns.md",
         "lua.md",
-        "other.md",
-        "sort.md",
+        "rotations-and-quaternions.md",
     ),
     accent=(62, 190, 204),
 )
@@ -124,7 +123,7 @@ GRAPHICS = VolumeSpec(
     source_dir="02_Graphics",
     title="计算机图形学",
     part_label="第二编",
-    order=("Generial.md", "quarter&eula.md", "render_pipeline.md"),
+    order=("transforms-and-skinning.md", "rendering-and-gpu.md"),
     accent=(244, 147, 61),
 )
 
@@ -132,7 +131,12 @@ UE = VolumeSpec(
     source_dir="03_UE",
     title="Unreal Engine",
     part_label="第三编",
-    order=("General_View.md", "GC.md", "RTTI.md", "compare.md"),
+    order=(
+        "animation-overview.md",
+        "garbage-collection-and-reflection.md",
+        "runtime-type-checking.md",
+        "animation-system-comparison.md",
+    ),
     accent=(118, 126, 247),
 )
 
@@ -382,7 +386,11 @@ def heading_slug(text: str, number: int) -> str:
 
 def discover_markdowns(root: Path, volume: VolumeSpec) -> list[Path]:
     source_dir = root / volume.source_dir
-    discovered = [p for p in source_dir.rglob("*") if p.is_file() and p.suffix.lower() == ".md"]
+    # README files are repository navigation; EPUB navigation is generated below.
+    discovered = [
+        p for p in source_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() == ".md" and p.name.casefold() != "readme.md"
+    ]
     by_relative = {p.relative_to(source_dir).as_posix().casefold(): p for p in discovered}
     ordered: list[Path] = []
     seen: set[str] = set()
@@ -440,6 +448,7 @@ def is_ascii_visual_line(line: str) -> bool:
 
 def prepare_markdown(source_text: str) -> str:
     """Apply presentation-only fixes without changing any source Markdown file."""
+    repository_navigation = "[返回本章目录](README.md) · [返回手册首页](../README.md)"
     expanded: list[str] = []
     fence_character = ""
     fence_length = 0
@@ -455,6 +464,9 @@ def prepare_markdown(source_text: str) -> str:
             continue
         if fence_character:
             expanded.append(line)
+        elif line == repository_navigation:
+            # EPUB has its own navigation. Keep the same text in code samples.
+            continue
         else:
             # These notes use the two literal characters "\n" as a visual line break.
             expanded.extend(line.split(r"\n"))
@@ -1095,10 +1107,22 @@ def build_book(book: BookSpec, repo_root: Path, output_dir: Path) -> dict[str, o
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--only", choices=("cpp", "graphics", "ue", "combined", "all"), default="all")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1],
+        help="Repository root containing the three chapter directories.",
+    )
+    parser.add_argument(
+        "--output", type=Path, default=None,
+        help="Output directory; when omitted, use ROOT/output/AppleBooks_EPUB.",
+    )
+    parser.add_argument(
+        "--only", choices=("cpp", "graphics", "ue", "combined", "all"), default="all",
+        help="Build one volume, the combined book, or all four books.",
+    )
     return parser.parse_args(argv)
 
 
