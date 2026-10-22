@@ -1,0 +1,26 @@
+# Local archives, unrelated work, and temporary conversion files
+/.local-archive/
+/.tmp-codex-installer/
+/campus-repair-system/
+/stock/
+/tmp/
+/ocr_test.txt
+
+# Generated exports (keep the original learning source and reference PDF)
+/output/*
+!/output/cpp-os-review-2026-09-05.cpp
+!/output/pdf/
+
+# Runtime/build files
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+*.exe
+*.obj
+*.o
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
